@@ -1,0 +1,99 @@
+#!/bin/bash
+
+BASE_PATH=`dirname $0`
+PROJECTS_DIR=`readlink -f "${BASE_PATH}/../projects"`
+
+for project in `ls $PROJECTS_DIR`
+do
+
+	echo Building $project...
+	DIR="$PROJECTS_DIR/$project"
+	SRC_DIR="$DIR/src"
+	COMPOSER_PATH="$SRC_DIR/composer.phar"
+	GIT="git --work-tree=$SRC_DIR --git-dir=$SRC_DIR/.git"
+	
+	$GIT fetch origin
+	
+	$GIT branch -vr | grep -v HEAD | grep master | while read branch
+	do
+		name=`echo $branch | awk '{print $1}' `
+		sha=`echo $branch | awk '{print $2}' `
+		description=`echo $branch | tr -s " " | cut -d" " -f 3- `
+		
+		remote=`echo $name | cut -d"/" -f 1 `
+		branch=`echo $name | cut -d"/" -f 2 `
+		cur_head=`$GIT show-ref --abbrev -s HEAD`
+		
+		if $GIT show-ref --quiet --verify refs/heads/$branch;
+		then
+			$GIT checkout -fq $branch
+		else
+			$GIT checkout -fqtb $branch $name 
+		fi
+		
+		log=$((`$GIT log HEAD..$name --oneline | wc -l`))
+		
+		# nothing to do here, go to next branch
+		[ $log -eq 0 ] && continue
+
+		echo Branch $branch changed, testing $log commits...
+		
+		$GIT log HEAD..$name --oneline
+		$GIT checkout -fq $sha
+		
+		FULL_SHA=`$GIT rev-parse $sha`
+		BUILD_PATH="$DIR/build"
+		BUILD_DIR="$BUILD_PATH/$FULL_SHA"
+		
+		if [[ ! -d "$BUILD_DIR" ]]
+		then
+			mkdir -p "$BUILD_DIR"
+		fi
+		
+		if [[ ( ! -f "$COMPOSER_PATH" ) && ( -f "$SRC_DIR/composer.json" ) ]] 
+		then
+			COMPOSER_PATH="$DIR/composer.phar"
+			
+			if [[ ! -f "$COMPOSER_PATH" ]]
+			then
+				curl -s http://getcomposer.org/installer | php --install-dir "$DIR"
+			else
+				php "$COMPOSER_PATH" self-update
+			fi
+		fi
+		
+		if [[ -f "$SRC_DIR/composer.json" ]]
+		then
+			php "$COMPOSER_PATH" --working-dir="$SRC_DIR" install --dev --no-ansi --no-interaction --no-scripts
+		fi
+
+		if [[ -f "$DIR/index.html.skel" ]]
+		then
+			cp "$DIR/index.html.skel" "$BUILD_DIR/index.html"
+		fi
+		
+		$SRC_DIR/bin/phing -buildfile "$SRC_DIR/build.xml" \
+			-logger phing.listener.HtmlColorLogger -Dbuild.path="$BUILD_DIR" 2>&1 \
+			| sed s/phpunit.html/'<a href="phpunit.html">Show detailed report<\/a>'/ \
+			| sed s/behat.html/'<a href="behat.html">Show detailed report<\/a>'/ \
+		>> "$BUILD_DIR/index.html" 
+		 
+		err=${PIPESTATUS[0]}
+		
+		GIT_PAGES="git --work-tree=$BUILD_PATH --git-dir=$BUILD_PATH/.git"
+		
+		$GIT_PAGES add -A 
+		# if git cherry, amend!
+		$GIT_PAGES commit -m "testing ${cur_head}..$sha"
+		$GIT_PAGES push origin HEAD:gh-pages
+
+		$GIT checkout -fq $branch
+		$GIT reset -q --hard $name
+
+#		$GIT reset -q --hard $cur_head
+		
+	done
+
+	echo Done;
+
+done
