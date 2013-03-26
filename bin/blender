@@ -1,6 +1,7 @@
 #!/bin/bash
 
 BASE_PATH=`dirname $0`
+RESOURCES_DIR=`readlink -f "${BASE_PATH}/../resources"`
 PROJECTS_DIR=`readlink -f "${BASE_PATH}/../projects"`
 
 for project in `ls $PROJECTS_DIR`
@@ -80,19 +81,42 @@ do
 		 
 		err=${PIPESTATUS[0]}
 		
+		echo $err > "$BUILD_DIR/status"
+		
+		passing=0
+		case $err in
+		0)
+			cp "${RESOURCES_DIR}/passing.png" "${BUILD_PATH}/branches/${branch}.png"
+			passing=1
+			;;
+		1)
+			cp "${RESOURCES_DIR}/failing.png" "${BUILD_PATH}/branches/${branch}.png"
+			;;
+		*)
+			cp "${RESOURCES_DIR}/unknown.png" "${BUILD_PATH}/branches/${branch}.png"
+			;;
+		esac
+		
 		GIT_PAGES="git --work-tree=$BUILD_PATH --git-dir=$BUILD_PATH/.git"
 		
-		$GIT_PAGES add -A 
+#		$GIT reset -q --hard $cur_head
+#		continue;
+		
+		$GIT_PAGES add -A
 		# if git cherry, amend!
-		$GIT_PAGES commit -m "testing ${cur_head}..$sha"
-		$GIT_PAGES push origin HEAD:gh-pages
+		$GIT_PAGES commit -qm "testing ${cur_head}..$sha"
+		$GIT_PAGES push -q origin HEAD:gh-pages
 
 		$GIT checkout -fq $branch
 		$GIT reset -q --hard $name
 
-#		$GIT reset -q --hard $cur_head
-		
 	done
+	
+	if [[ -f "$DIR/snitch" ]]
+	then 
+		snitch=`cat "$DIR/snitch" | perl -ne 'chomp and print'`
+		curl https://nosnch.in/$snitch &> /dev/null
+	fi
 
 	echo Done;
 
