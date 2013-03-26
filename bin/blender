@@ -7,16 +7,52 @@ PROJECTS_DIR=`readlink -f "${BASE_PATH}/../projects"`
 for project in `ls $PROJECTS_DIR`
 do
 
-	echo Building $project...
+	echo -n "Building $project... "
 	DIR="$PROJECTS_DIR/$project"
+	
+	if [[ -f "$DIR/skip" ]]
+	then
+		echo skipped
+		continue
+	fi
+	echo
+	
 	SRC_DIR="$DIR/src"
 	COMPOSER_PATH="$SRC_DIR/composer.phar"
 	GIT="git --work-tree=$SRC_DIR --git-dir=$SRC_DIR/.git"
+	TOKEN_PATH="$DIR/token"
+	REPO=$($GIT remote -v | head -1 | grep -oE '\w+/\w+')
+	REPO_USER=$(echo $REPO | cut -d/ -f1)
+	REPO_NAME=$(echo $REPO | cut -d/ -f2)
+	PAGES_URL="http://$(echo $REPO_USER | tr 'A-Z' 'a-z').github.com/$REPO_NAME"
 	
+	
+	if [[ ! -f "$TOKEN_PATH" ]]
+	then
+		echo "GitHub token required for project $project"
+		echo "Put it in $TOKEN_PATH"
+		exit 1;
+	fi
+	
+	token=$(cat "$TOKEN_PATH" | perl -ne "chomp and print")
+	authorization="Authorization: token $token"
+	API="https://api.github.com"
+
+	PULLS=$(
+		curl -s -H "$authorization" "$API/repos/$REPO/pulls" | php -r '
+			echo implode("\n", array_map(function ($pull) {
+				return $pull["number"] . "\t" . $pull["head"]["ref"] . "\t" 
+					. $pull["head"]["sha"];
+			}, json_decode(file_get_contents("php://stdin"), true)));
+		'
+	);
+
 	$GIT fetch origin
 	
-	$GIT branch -vr | grep -v HEAD | grep master | while read branch
+	branches=$(echo "$PULLS" | awk '{ print $2 }'; echo "master")
+	$GIT branch -vr | grep -v HEAD | grep -F "$branches" | while read branch
 	do
+	
 		name=`echo $branch | awk '{print $1}' `
 		sha=`echo $branch | awk '{print $2}' `
 		description=`echo $branch | tr -s " " | cut -d" " -f 3- `
@@ -24,18 +60,25 @@ do
 		remote=`echo $name | cut -d"/" -f 1 `
 		branch=`echo $name | cut -d"/" -f 2 `
 		cur_head=`$GIT show-ref --abbrev -s HEAD`
+
+		pull_id=$(echo "$PULLS" | grep "$branch" | awk '{ print $1 }')
+		pull_sha=$(echo "$PULLS" | grep "$branch" | awk '{ print $3 }')
 		
 		if $GIT show-ref --quiet --verify refs/heads/$branch;
 		then
 			$GIT checkout -fq $branch
 		else
+			is_fresh=1
 			$GIT checkout -fqtb $branch $name 
 		fi
 		
 		log=$((`$GIT log HEAD..$name --oneline | wc -l`))
 		
 		# nothing to do here, go to next branch
-		[ $log -eq 0 ] && continue
+		if [[ ( $log -eq 0 ) && ( -z "$is_fresh" ) ]]
+		then
+			continue
+		fi
 
 		echo Branch $branch changed, testing $log commits...
 		
@@ -83,19 +126,45 @@ do
 		
 		echo $err > "$BUILD_DIR/status"
 		
+		last_status=0
+		BRANCH_STATUS_PATH="$BUILD_PATH/branches/$branch.status"
+		if [[ -f "$BRACH_STATUS_PATH" ]]
+		then
+			last_status=$(( $(cat "$BRANCH_STATUS_PATH") ))
+		fi
+		echo $err > "$BRANCH_STATUS_PATH"
+		
 		passing=0
+		state="pending"
 		case $err in
 		0)
 			cp "${RESOURCES_DIR}/passing.png" "${BUILD_PATH}/branches/${branch}.png"
 			passing=1
+			state="succes"
 			;;
 		1)
 			cp "${RESOURCES_DIR}/failing.png" "${BUILD_PATH}/branches/${branch}.png"
+			state="failure"
 			;;
 		*)
 			cp "${RESOURCES_DIR}/unknown.png" "${BUILD_PATH}/branches/${branch}.png"
+			state="error"
 			;;
 		esac
+		
+		if [[ -n "$pull_id" ]]
+		then
+			# pull request!
+			echo '{
+				"state": "'$state'",
+				"target_url": "'$PAGES_URL/$FULL_SHA'"
+			}' \
+			| curl -s -H "$authorization" --data-binary "`cat -`" "$API/repos/$REPO/statuses/$pull_sha" \
+			>/dev/null
+		else
+			# we are on master!
+			echo meh;
+		fi
 		
 		GIT_PAGES="git --work-tree=$BUILD_PATH --git-dir=$BUILD_PATH/.git"
 		
