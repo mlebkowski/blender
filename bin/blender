@@ -159,7 +159,7 @@ do
 				"state": "'$state'",
 				"target_url": "'$PAGES_URL/$FULL_SHA'"
 			}' \
-			| curl -H "$authorization" --data-binary "`cat -`" "$API/repos/$REPO/statuses/$pull_sha" \
+			| curl -s -H "$authorization" --data-binary "`cat -`" "$API/repos/$REPO/statuses/$pull_sha" \
 			>/dev/null
 		else
 			# we are on master!
