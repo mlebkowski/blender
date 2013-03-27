@@ -140,7 +140,7 @@ do
 		0)
 			cp "${RESOURCES_DIR}/passing.png" "${BUILD_PATH}/branches/${branch}.png"
 			passing=1
-			state="succes"
+			state="success"
 			;;
 		1)
 			cp "${RESOURCES_DIR}/failing.png" "${BUILD_PATH}/branches/${branch}.png"
@@ -159,7 +159,7 @@ do
 				"state": "'$state'",
 				"target_url": "'$PAGES_URL/$FULL_SHA'"
 			}' \
-			| curl -s -H "$authorization" --data-binary "`cat -`" "$API/repos/$REPO/statuses/$pull_sha" \
+			| curl -H "$authorization" --data-binary "`cat -`" "$API/repos/$REPO/statuses/$pull_sha" \
 			>/dev/null
 		else
 			# we are on master!
